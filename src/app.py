@@ -259,7 +259,7 @@ if st.sidebar.button(
 
 # Create tabs for different views if we have data
 if st.session_state.data is not None:
-    tabs = ["Charts", "Signals", "Summary"]
+    tabs = ["Charts", "Report", "Summary"]
     active_tab = st.radio("", tabs, horizontal=True, label_visibility="collapsed", index=tabs.index(st.session_state.active_tab))
     st.session_state.active_tab = active_tab
     
@@ -268,7 +268,7 @@ if st.session_state.data is not None:
         fig = create_stock_chart(st.session_state.data, title=f"{ticker} - Volume Breakout Analysis")
         st.plotly_chart(fig, use_container_width=True)
     
-    elif active_tab == "Signals":
+    elif active_tab == "Report":
         st.subheader("Breakout Signals")
         if len(st.session_state.signals_df) > 0:
             st.dataframe(
@@ -283,9 +283,9 @@ if st.session_state.data is not None:
             # Download buttons
             csv = st.session_state.signals_df.to_csv(index=True)
             st.download_button(
-                label="Download Signals (CSV)",
+                label="Download Report (CSV)",
                 data=csv,
-                file_name=f"{ticker}_breakout_signals.csv",
+                file_name=f"{ticker}_breakout_report.csv",
                 mime="text/csv"
             )
         else:
