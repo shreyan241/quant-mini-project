@@ -31,6 +31,33 @@ It looks for instances where both volume and price action show significant incre
 potentially indicating strong directional moves.
 """)
 
+# Initialize session state for data persistence
+if 'data' not in st.session_state:
+    st.session_state.data = None
+if 'summary_df' not in st.session_state:
+    st.session_state.summary_df = None
+if 'signals_df' not in st.session_state:
+    st.session_state.signals_df = None
+if 'start_date' not in st.session_state:
+    st.session_state.start_date = datetime.now().date() - timedelta(days=365)
+if 'end_date' not in st.session_state:
+    st.session_state.end_date = datetime.now().date() - timedelta(days=1)
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = "Charts"
+if 'previous_ticker' not in st.session_state:
+    st.session_state.previous_ticker = None
+if 'stock_list' not in st.session_state:
+    # Read the local CSV file
+    stocks_df = pd.read_csv('src/data/us_symbols.csv')
+    # Create formatted strings for the dropdown
+    stocks_df['display_name'] = stocks_df.apply(lambda x: f"{x['ticker']} - {x['name']} ({x['exchange']})", axis=1)
+    # Create a dictionary for easy ticker lookup
+    st.session_state.ticker_to_display = dict(zip(stocks_df['ticker'], stocks_df['display_name']))
+    # Store the display names list for the dropdown
+    st.session_state.stock_list = stocks_df['display_name'].tolist()
+    # Store the tickers list
+    st.session_state.tickers = stocks_df['ticker'].tolist()
+
 def validate_dates(start_date: datetime, end_date: datetime, holding_period: int) -> Tuple[bool, str]:
     """
     Validate the selected date range considering trading days and holding period.
@@ -71,7 +98,7 @@ def validate_dates(start_date: datetime, end_date: datetime, holding_period: int
     
     return True, ""
 
-def validate_ticker(ticker: str) -> Tuple[bool, Optional[yf.Ticker]]:
+def validate_ticker(ticker: str) -> Tuple[bool, Optional[yf.Ticker], str]:
     """
     Validate if the ticker exists and has data.
     
@@ -79,15 +106,32 @@ def validate_ticker(ticker: str) -> Tuple[bool, Optional[yf.Ticker]]:
         ticker: Stock symbol to validate
         
     Returns:
-        Tuple of (is_valid, ticker_object)
+        Tuple of (is_valid, ticker_object, error_message)
     """
+    if not ticker:
+        return False, None, "Please enter a ticker symbol"
+    
     try:
         ticker_obj = yf.Ticker(ticker)
         # Try to get info to validate ticker
         info = ticker_obj.info
-        return True, ticker_obj
-    except:
-        return False, None
+        
+        # Debug info
+        # st.sidebar.write("Debug - Available info keys:", list(info.keys()) if info else "No info available")
+        
+        # More lenient validation - check if we can get any basic info
+        if info and any([
+            info.get('regularMarketPrice'),
+            info.get('currentPrice'),
+            info.get('ask'),
+            info.get('bid'),
+            info.get('previousClose')
+        ]):
+            return True, ticker_obj, ""
+            
+        return False, None, "No market data available for this ticker"
+    except Exception as e:
+        return False, None, f"Invalid ticker symbol or API error: {str(e)}"
 
 # Sidebar
 with st.sidebar:
@@ -95,16 +139,29 @@ with st.sidebar:
     
     # Stock Selection
     st.subheader("Stock Selection")
-    ticker = st.text_input(
-        "Enter Stock Symbol",
-        value="NVDA",
-        help="Enter a valid stock symbol (e.g., AAPL, MSFT, GOOGL)"
-    ).upper()
+    
+    # Stock selector with company names
+    selected_display = st.selectbox(
+        "Select Stock",
+        options=st.session_state.stock_list,
+        index=st.session_state.stock_list.index(st.session_state.ticker_to_display['NVDA']) if 'NVDA' in st.session_state.tickers else 0,
+        help="Select a stock or type to search by symbol/company name"
+    )
+    
+    # Extract ticker from the selection
+    ticker = selected_display.split(' - ')[0]
+    
+    # Reset data if ticker changes
+    if st.session_state.previous_ticker != ticker:
+        st.session_state.data = None
+        st.session_state.summary_df = None
+        st.session_state.signals_df = None
+        st.session_state.previous_ticker = ticker
     
     # Validate ticker
-    is_valid_ticker, ticker_obj = validate_ticker(ticker)
+    is_valid_ticker, ticker_obj, ticker_error = validate_ticker(ticker)
     if not is_valid_ticker:
-        st.error("Invalid ticker symbol. Please enter a valid stock symbol.")
+        st.error(ticker_error)
     else:
         # Show stock info
         info = ticker_obj.info
@@ -150,18 +207,23 @@ with st.sidebar:
     with col1:
         start_date = st.date_input(
             "Start Date",
-            value=today - timedelta(days=365),
+            value=st.session_state.start_date,
             help="Select the start date for analysis",
             max_value=today - timedelta(days=1)
         )
+        if start_date != st.session_state.start_date:
+            st.session_state.start_date = start_date
+            
     with col2:
         end_date = st.date_input(
             "End Date",
-            value=today - timedelta(days=1),  # Default to yesterday
+            value=st.session_state.end_date,
             help="Select the end date for analysis",
             min_value=start_date,
             max_value=today
         )
+        if end_date != st.session_state.end_date:
+            st.session_state.end_date = end_date
 
 # Validate dates
 is_valid_dates, date_error = validate_dates(start_date, end_date, holding_period)
@@ -191,45 +253,49 @@ if st.sidebar.button(
         df = identify_breakout_signals(df, volume_threshold, price_threshold)
         df = calculate_forward_returns(df, holding_period)
         
-        # Generate report
-        summary_df, signals_df = generate_signals_report(df)
-        
-        # Create tabs for different views
-        tab1, tab2, tab3 = st.tabs(["Charts", "Signals", "Summary"])
-        
-        with tab1:
-            st.subheader("Price and Volume Analysis")
-            fig = create_stock_chart(df, title=f"{ticker} - Volume Breakout Analysis")
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with tab2:
-            st.subheader("Breakout Signals")
-            if len(signals_df) > 0:
-                st.dataframe(
-                    signals_df.style.format({
-                        'Entry_Price': '${:.2f}',
-                        'Exit_Price': '${:.2f}',
-                        'Volume': '{:,.0f}',  # Add commas for readability
-                        'Volume_MA_20': '{:,.0f}'  # Add commas for readability
-                    })
-                )
-                
-                # Download buttons
-                csv = signals_df.to_csv(index=True)
-                st.download_button(
-                    label="Download Signals (CSV)",
-                    data=csv,
-                    file_name=f"{ticker}_breakout_signals.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.info("No breakout signals found in the selected period.")
-        
-        with tab3:
-            st.subheader("Strategy Summary")
-            # Configure the dataframe display with custom height and width
+        # Generate report and store in session state
+        st.session_state.data = df
+        st.session_state.summary_df, st.session_state.signals_df = generate_signals_report(df)
+
+# Create tabs for different views if we have data
+if st.session_state.data is not None:
+    tabs = ["Charts", "Signals", "Summary"]
+    active_tab = st.radio("", tabs, horizontal=True, label_visibility="collapsed", index=tabs.index(st.session_state.active_tab))
+    st.session_state.active_tab = active_tab
+    
+    if active_tab == "Charts":
+        st.subheader("Price and Volume Analysis")
+        fig = create_stock_chart(st.session_state.data, title=f"{ticker} - Volume Breakout Analysis")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    elif active_tab == "Signals":
+        st.subheader("Breakout Signals")
+        if len(st.session_state.signals_df) > 0:
             st.dataframe(
-                summary_df,
-                width=800,  # Wider width to accommodate columns
-                height=600  # Taller height to show all rows
-            ) 
+                st.session_state.signals_df.style.format({
+                    'Entry_Price': '${:.2f}',
+                    'Exit_Price': '${:.2f}',
+                    'Volume': '{:,.0f}',  # Add commas for readability
+                    'Volume_MA_20': '{:,.0f}'  # Add commas for readability
+                })
+            )
+            
+            # Download buttons
+            csv = st.session_state.signals_df.to_csv(index=True)
+            st.download_button(
+                label="Download Signals (CSV)",
+                data=csv,
+                file_name=f"{ticker}_breakout_signals.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No breakout signals found in the selected period.")
+    
+    else:  # Summary tab
+        st.subheader("Strategy Summary")
+        # Configure the dataframe display with custom height and width
+        st.dataframe(
+            st.session_state.summary_df,
+            width=800,  # Wider width to accommodate columns
+            height=600  # Taller height to show all rows
+        ) 
