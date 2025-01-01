@@ -23,13 +23,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# Title and description
-st.title("📈 Volume Breakout Strategy Scanner")
-st.markdown("""
-This tool helps identify and analyze volume breakout patterns in stocks. 
-It looks for instances where both volume and price action show significant increases, 
-potentially indicating strong directional moves.
-""")
+# Main UI section - Create this before any other content
+main_container = st.container()
+tab_nav_container = st.container()
+content_container = st.container()
 
 # Initialize session state for data persistence
 if 'data' not in st.session_state:
@@ -46,6 +43,10 @@ if 'active_tab' not in st.session_state:
     st.session_state.active_tab = "Charts"
 if 'previous_ticker' not in st.session_state:
     st.session_state.previous_ticker = None
+if 'selected_ticker' not in st.session_state:
+    st.session_state.selected_ticker = None
+
+# Initialize stock list if not already done
 if 'stock_list' not in st.session_state:
     # Read the local CSV file
     stocks_df = pd.read_csv('src/data/us_symbols.csv')
@@ -57,6 +58,9 @@ if 'stock_list' not in st.session_state:
     st.session_state.stock_list = stocks_df['display_name'].tolist()
     # Store the tickers list
     st.session_state.tickers = stocks_df['ticker'].tolist()
+    # Set default ticker
+    st.session_state.selected_ticker = 'NVDA'
+    st.session_state.previous_ticker = 'NVDA'
 
 def validate_dates(start_date: datetime, end_date: datetime, holding_period: int) -> Tuple[bool, str]:
     """
@@ -144,19 +148,31 @@ with st.sidebar:
     selected_display = st.selectbox(
         "Select Stock",
         options=st.session_state.stock_list,
-        index=st.session_state.stock_list.index(st.session_state.ticker_to_display['NVDA']) if 'NVDA' in st.session_state.tickers else 0,
-        help="Select a stock or type to search by symbol/company name"
+        index=st.session_state.stock_list.index(st.session_state.ticker_to_display[st.session_state.selected_ticker]),
+        help="Select a stock or type to search by symbol/company name",
+        key="stock_selector"
     )
     
     # Extract ticker from the selection
-    ticker = selected_display.split(' - ')[0]
+    temp_ticker = selected_display.split(' - ')[0]
     
-    # Reset data if ticker changes
-    if st.session_state.previous_ticker != ticker:
-        st.session_state.data = None
-        st.session_state.summary_df = None
-        st.session_state.signals_df = None
-        st.session_state.previous_ticker = ticker
+    # Apply button for stock selection
+    if st.button("Apply Stock Selection", type="primary"):
+        if temp_ticker != st.session_state.selected_ticker:
+            st.session_state.data = None
+            st.session_state.summary_df = None
+            st.session_state.signals_df = None
+            st.session_state.previous_ticker = st.session_state.selected_ticker
+            st.session_state.selected_ticker = temp_ticker
+            st.rerun()
+    
+    # Show current selection status
+    if temp_ticker != st.session_state.selected_ticker:
+        st.info(f"Click 'Apply' to switch to {temp_ticker}")
+        # Use the current selected ticker for validation
+        ticker = st.session_state.selected_ticker
+    else:
+        ticker = temp_ticker
     
     # Validate ticker
     is_valid_ticker, ticker_obj, ticker_error = validate_ticker(ticker)
@@ -257,50 +273,79 @@ if st.sidebar.button(
         st.session_state.data = df
         st.session_state.summary_df, st.session_state.signals_df = generate_signals_report(df)
 
-# Create tabs for different views if we have data
-if st.session_state.data is not None:
-    tabs = ["Charts", "Report", "Summary"]
-    active_tab = st.radio(
-        label="Navigation",  # Add a label for accessibility
-        options=tabs,
-        horizontal=True,
-        key="tab_navigation",  # Add a key to maintain state
-        label_visibility="collapsed"
+def render_chart_tab():
+    """Render the chart tab content"""
+    st.subheader("Price and Volume Analysis")
+    fig = create_stock_chart(st.session_state.data, title=f"{ticker} - Volume Breakout Analysis")
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_report_tab():
+    """Render the report tab content"""
+    st.subheader("Breakout Signals")
+    if len(st.session_state.signals_df) > 0:
+        st.dataframe(
+            st.session_state.signals_df.style.format({
+                'Entry_Price': '${:.2f}',
+                'Exit_Price': '${:.2f}',
+                'Volume': '{:,.0f}',
+                'Volume_MA_20': '{:,.0f}'
+            })
+        )
+        
+        # Download buttons
+        csv = st.session_state.signals_df.to_csv(index=True)
+        st.download_button(
+            label="Download Report (CSV)",
+            data=csv,
+            file_name=f"{ticker}_breakout_report.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("No breakout signals found in the selected period.")
+
+def render_summary_tab():
+    """Render the summary tab content"""
+    st.subheader("Strategy Summary")
+    st.dataframe(
+        st.session_state.summary_df,
+        width=800,
+        height=600
     )
-    
-    if active_tab == "Charts":
-        st.subheader("Price and Volume Analysis")
-        fig = create_stock_chart(st.session_state.data, title=f"{ticker} - Volume Breakout Analysis")
-        st.plotly_chart(fig, use_container_width=True)
-    
-    elif active_tab == "Report":
-        st.subheader("Breakout Signals")
-        if len(st.session_state.signals_df) > 0:
-            st.dataframe(
-                st.session_state.signals_df.style.format({
-                    'Entry_Price': '${:.2f}',
-                    'Exit_Price': '${:.2f}',
-                    'Volume': '{:,.0f}',  # Add commas for readability
-                    'Volume_MA_20': '{:,.0f}'  # Add commas for readability
-                })
+
+# Map of tab names to their render functions
+TAB_RENDERERS = {
+    "Charts": render_chart_tab,
+    "Report": render_report_tab,
+    "Summary": render_summary_tab
+}
+
+# After all sidebar content, in the main area
+with main_container:
+    # Title and description
+    st.title("📈 Volume Breakout Strategy Scanner")
+    st.markdown("""
+    This tool helps identify and analyze volume breakout patterns in stocks. 
+    It looks for instances where both volume and price action show significant increases, 
+    potentially indicating strong directional moves.
+    """)
+
+    if st.session_state.data is not None:
+        # Tab selection
+        with tab_nav_container:
+            tabs = ["Charts", "Report", "Summary"]
+            selected_tab = st.radio(
+                label="Navigation",
+                options=tabs,
+                horizontal=True,
+                key="tab_navigation",
+                label_visibility="collapsed"
             )
             
-            # Download buttons
-            csv = st.session_state.signals_df.to_csv(index=True)
-            st.download_button(
-                label="Download Report (CSV)",
-                data=csv,
-                file_name=f"{ticker}_breakout_report.csv",
-                mime="text/csv"
-            )
-        else:
-            st.info("No breakout signals found in the selected period.")
-    
-    else:  # Summary tab
-        st.subheader("Strategy Summary")
-        # Configure the dataframe display with custom height and width
-        st.dataframe(
-            st.session_state.summary_df,
-            width=800,  # Wider width to accommodate columns
-            height=600  # Taller height to show all rows
-        ) 
+            # Update active tab if selection changed
+            if selected_tab != st.session_state.active_tab:
+                st.session_state.active_tab = selected_tab
+
+        # Content area
+        with content_container:
+            # Render the active tab content
+            TAB_RENDERERS[st.session_state.active_tab]() 
