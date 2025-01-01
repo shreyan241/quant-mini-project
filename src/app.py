@@ -260,8 +260,13 @@ if st.sidebar.button(
 # Create tabs for different views if we have data
 if st.session_state.data is not None:
     tabs = ["Charts", "Report", "Summary"]
-    active_tab = st.radio("", tabs, horizontal=True, label_visibility="collapsed", index=tabs.index(st.session_state.active_tab))
-    st.session_state.active_tab = active_tab
+    active_tab = st.radio(
+        label="Navigation",  # Add a label for accessibility
+        options=tabs,
+        horizontal=True,
+        key="tab_navigation",  # Add a key to maintain state
+        label_visibility="collapsed"
+    )
     
     if active_tab == "Charts":
         st.subheader("Price and Volume Analysis")
