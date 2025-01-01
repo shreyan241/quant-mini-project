@@ -157,7 +157,7 @@ with st.sidebar:
     with col2:
         end_date = st.date_input(
             "End Date",
-            value=today - timedelta(days=holding_period + 1),  # Default to holding_period days before today
+            value=today - timedelta(days=1),  # Default to yesterday
             help="Select the end date for analysis",
             min_value=start_date,
             max_value=today
@@ -167,14 +167,16 @@ with st.sidebar:
 is_valid_dates, date_error = validate_dates(start_date, end_date, holding_period)
 if not is_valid_dates:
     st.error(date_error)
-    st.stop()
 
-# Run Analysis button
-if st.sidebar.button("Run Analysis", type="primary"):
-    if not is_valid_ticker:
-        st.error("Please enter a valid ticker symbol before running analysis.")
-        st.stop()
-    
+# Check if all conditions are valid for analysis
+is_ready_to_run = is_valid_ticker and is_valid_dates
+
+# Run Analysis button with conditional styling
+if st.sidebar.button(
+    "Run Analysis",
+    type="primary" if is_ready_to_run else "secondary",
+    disabled=not is_ready_to_run
+):
     with st.spinner(f"Analyzing {ticker}..."):
         # Fetch data with holding period adjustment
         data = get_stock_data(ticker, start_date, end_date, holding_period)
@@ -205,10 +207,10 @@ if st.sidebar.button("Run Analysis", type="primary"):
             if len(signals_df) > 0:
                 st.dataframe(
                     signals_df.style.format({
-                        'Price': '${:.2f}',
-                        'Volume_Ratio': '{:.2f}x',
-                        'Price_Change_Pct': '{:+.2f}%',
-                        'Forward_Return': '{:+.2f}%'
+                        'Entry_Price': '${:.2f}',
+                        'Exit_Price': '${:.2f}',
+                        'Volume': '{:,.0f}',  # Add commas for readability
+                        'Volume_MA_20': '{:,.0f}'  # Add commas for readability
                     })
                 )
                 
@@ -225,4 +227,9 @@ if st.sidebar.button("Run Analysis", type="primary"):
         
         with tab3:
             st.subheader("Strategy Summary")
-            st.dataframe(summary_df) 
+            # Configure the dataframe display with custom height and width
+            st.dataframe(
+                summary_df,
+                width=800,  # Wider width to accommodate columns
+                height=600  # Taller height to show all rows
+            ) 

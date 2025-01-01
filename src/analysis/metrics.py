@@ -119,8 +119,13 @@ def calculate_forward_returns(df: pd.DataFrame,
                 
         except Exception as e:
             print(f"Error calculating returns for {day}: {str(e)}")
+            continue  # Skip this signal and move to next
     
     return df
+
+# Helper function to format with sign
+def format_with_sign(value: float) -> str:
+    return f"{'+' if value > 0 else ''}{value:.2f}%"
 
 def generate_signals_report(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -145,14 +150,6 @@ def generate_signals_report(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFram
         'Value': list(summary_stats.values())
     })
     
-    # Format the summary DataFrame
-    summary_df['Value'] = summary_df.apply(lambda row: 
-        f"{row['Value']:.2f}%" if "Rate" in row['Metric'] or "Return" in row['Metric']
-        else f"{row['Value']:.2f}" if isinstance(row['Value'], float)
-        else row['Value'],
-        axis=1
-    )
-    
     # Get only breakout days with their forward returns
     signals = df[df['Is_Breakout']].copy()
     
@@ -161,21 +158,16 @@ def generate_signals_report(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFram
     
     # Create detailed signals DataFrame
     signals_df = pd.DataFrame({
-        'Signal_Date': signals.index,
-        'Entry_Price': signals['Close'],
+        'Signal_Date': signals.index.date,  # Convert to date only
+        'Entry_Price': signals['Close'].round(2),
         'Volume': signals['Volume'],
-        'Volume_MA_20': signals['Volume_MA'],
-        'Volume_Ratio': signals['Volume_Ratio'].round(2),
-        'Price_Change_Pct': signals['Price_Change_Pct'].round(2),
-        'Forward_Return': signals['Forward_Returns'].round(2),
-        'Exit_Date': signals['Exit_Date'],
-        'Exit_Price': signals['Exit_Price']
+        'Volume_MA_20': signals['Volume_MA'].astype(int),  # Convert to integer
+        'Volume_Ratio': signals['Volume_Ratio'].round(2).apply(lambda x: f"{x:.2f}x"),
+        'Price_Change_Pct': signals['Price_Change_Pct'].apply(format_with_sign),
+        'Forward_Return': signals['Forward_Returns'].apply(format_with_sign),
+        'Exit_Date': pd.to_datetime(signals['Exit_Date']).dt.date,  # Convert to date only
+        'Exit_Price': signals['Exit_Price'].round(2)
     })
-    
-    # Add market context (if available)
-    if 'SPY_Return' in signals.columns:
-        signals_df['Market_Return'] = signals['SPY_Return'].round(2)
-        signals_df['Excess_Return'] = (signals['Forward_Returns'] - signals['SPY_Return']).round(2)
     
     # Sort by date
     signals_df = signals_df.sort_index()
@@ -190,9 +182,33 @@ def generate_breakout_summary(df: pd.DataFrame) -> Dict:
         df: DataFrame with breakout signals and returns
     
     Returns:
-        Dictionary with summary statistics
+        Dictionary with summary statistics. Returns zeros/empty values if no breakout trades.
     """
     breakout_data = df[df['Is_Breakout']].copy()
+    
+    # Drop any rows with NaN in critical columns
+    breakout_data = breakout_data.dropna(subset=['Forward_Returns', 'Volume_Ratio', 'Price_Change_Pct'])
+    
+    # If no breakout trades or all were dropped, return zeros/empty values
+    if len(breakout_data) == 0:
+        return {
+            'Total_Breakout_Days': '0',
+            'Average_Return': '0.00%',
+            'Win_Rate': '0.00%',
+            'Best_Trade': '0.00%',
+            'Worst_Trade': '0.00%',
+            'Avg_Win_Size': '0.00%',
+            'Avg_Loss_Size': '0.00%',
+            'Avg_Days_Between_Signals': 'N/A',
+            'Avg_Volume_Ratio': '0.00x',
+            'Max_Volume_Ratio': '0.00x',
+            'Min_Volume_Ratio': '0.00x',
+            'Avg_Price_Change': '0.00%',
+            'Max_Price_Change': '0.00%',
+            'Min_Price_Change': '0.00%',
+            'First_Signal_Date': None,
+            'Last_Signal_Date': None
+        }
     
     # Basic Statistics
     total_trades = len(breakout_data)
@@ -202,9 +218,6 @@ def generate_breakout_summary(df: pd.DataFrame) -> Dict:
     # Calculate consecutive signals
     breakout_data['Days_Between_Signals'] = breakout_data.index.to_series().diff().dt.days
     
-    # Risk Metrics
-    returns_std = breakout_data['Forward_Returns'].std()
-    
     # Separate winning and losing trades
     winning_returns = breakout_data.loc[winning_trades, 'Forward_Returns']
     losing_returns = breakout_data.loc[losing_trades, 'Forward_Returns']
@@ -212,37 +225,38 @@ def generate_breakout_summary(df: pd.DataFrame) -> Dict:
     # Volume Analysis
     volume_ratios = breakout_data['Volume_Ratio']
     
+    # Helper function to safely calculate mean
+    def safe_mean(series):
+        return series.mean() if len(series) > 0 else 0.0
+    
     summary = {
         # Basic Metrics
-        'Total_Breakout_Days': total_trades,
-        'Average_Return': breakout_data['Forward_Returns'].mean(),
-        'Win_Rate': (winning_trades.sum() / total_trades * 100) if total_trades > 0 else 0,
+        'Total_Breakout_Days': str(total_trades),
+        'Average_Return': format_with_sign(safe_mean(breakout_data['Forward_Returns'])),
+        'Win_Rate': f"{(winning_trades.sum() / total_trades * 100):.2f}%",
         
         # Risk Metrics
-        'Return_Std_Dev': returns_std,
-        'Best_Trade': breakout_data['Forward_Returns'].max(),
-        'Worst_Trade': breakout_data['Forward_Returns'].min(),
+        'Best_Trade': format_with_sign(breakout_data['Forward_Returns'].max()),
+        'Worst_Trade': format_with_sign(breakout_data['Forward_Returns'].min()),
         
         # Trade Analysis
-        'Avg_Win_Size': winning_returns.mean() if len(winning_returns) > 0 else 0,
-        'Avg_Loss_Size': losing_returns.mean() if len(losing_returns) > 0 else 0,
-        'Avg_Days_Between_Signals': breakout_data['Days_Between_Signals'].mean(),
+        'Avg_Win_Size': format_with_sign(safe_mean(winning_returns)),
+        'Avg_Loss_Size': format_with_sign(safe_mean(losing_returns)),
+        'Avg_Days_Between_Signals': str(int(safe_mean(breakout_data['Days_Between_Signals']))) if len(breakout_data) > 1 else 'N/A',
         
         # Volume Analysis
-        'Avg_Volume_Ratio': volume_ratios.mean(),
-        'Max_Volume_Ratio': volume_ratios.max(),
-        'Min_Volume_Ratio': volume_ratios.min(),
-        'Volume_Ratio_Std': volume_ratios.std(),
+        'Avg_Volume_Ratio': f"{safe_mean(volume_ratios):.2f}x",
+        'Max_Volume_Ratio': f"{volume_ratios.max():.2f}x",
+        'Min_Volume_Ratio': f"{volume_ratios.min():.2f}x",
         
         # Price Analysis
-        'Avg_Price_Change': breakout_data['Price_Change_Pct'].mean(),
-        'Max_Price_Change': breakout_data['Price_Change_Pct'].max(),
-        'Min_Price_Change': breakout_data['Price_Change_Pct'].min(),
+        'Avg_Price_Change': format_with_sign(safe_mean(breakout_data['Price_Change_Pct'])),
+        'Max_Price_Change': format_with_sign(breakout_data['Price_Change_Pct'].max()),
+        'Min_Price_Change': format_with_sign(breakout_data['Price_Change_Pct'].min()),
         
         # First and Last Signal
-        'First_Signal': breakout_data.index.min(),
-        'Last_Signal': breakout_data.index.max(),
-        'Total_Days_Analyzed': (breakout_data.index.max() - breakout_data.index.min()).days
+        'First_Signal_Date': str(breakout_data.index.min().date()) if len(breakout_data) > 0 else None,
+        'Last_Signal_Date': str(breakout_data.index.max().date()) if len(breakout_data) > 0 else None
     }
     
     return summary 
