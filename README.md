@@ -2,7 +2,7 @@
 
 A Streamlit-based web application that helps identify and analyze volume breakout patterns in stocks. The tool scans for instances where both volume and price action show significant increases, potentially indicating strong directional moves.
 
-Live Demo: [Volume Breakout Scanner](https://quant-mini-project.streamlit.app/)
+Hosted at: [Volume Breakout Scanner](https://quant-mini-project.streamlit.app/)
 
 ## Project Overview
 
